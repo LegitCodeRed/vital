@@ -1,121 +1,204 @@
 /**
- * Vital MCP Server Implementation (HTTP/REST version)
- *
- * This class manages parameter state and handles requests from both
- * the C++ application and MCP clients.
+ * Vital MCP Server - Main server implementation
+ * Handles bidirectional communication with Vital C++ application via stdio
  */
 
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
-  ServerConfig,
-  ParameterMetadata,
-} from './types.js';
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema
+} from '@modelcontextprotocol/sdk/types.js';
+import readline from 'readline';
+import logger from './logger.js';
+import { tools, handleListParameters, handleGetParameter, handleSetParameter, handleBatchSetParameters } from './tools.js';
+import { resources, handleResourceRead } from './resources.js';
+import { McpMessage } from './types.js';
 
 export class VitalMcpServer {
-  private config: ServerConfig;
-  private parameters: Map<string, ParameterMetadata> = new Map();
-  private pendingChanges: Array<{ name: string; value: number }> = [];
+  private server: Server;
+  private transport: StdioServerTransport | null = null;
 
-  constructor(config: ServerConfig) {
-    this.config = config;
-    console.log('[VitalMcpServer] Initialized with config:', config);
+  constructor() {
+    this.server = new Server(
+      {
+        name: 'vital-mcp-server',
+        version: '1.0.0'
+      },
+      {
+        capabilities: {
+          tools: {},
+          resources: {}
+        }
+      }
+    );
+
+    this.setupHandlers();
+    logger.info('VitalMcpServer initialized');
+  }
+
+  private setupHandlers(): void {
+    // List available tools
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      logger.debug('Listing tools');
+      return { tools };
+    });
+
+    // Handle tool calls
+    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      logger.info(`Tool called: ${request.params.name}`);
+      
+      try {
+        switch (request.params.name) {
+          case 'list_parameters':
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(await handleListParameters())
+              }]
+            };
+            
+          case 'get_parameter':
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(await handleGetParameter(request.params.arguments))
+              }]
+            };
+            
+          case 'set_parameter':
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(await handleSetParameter(request.params.arguments))
+              }]
+            };
+            
+          case 'batch_set_parameters':
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(await handleBatchSetParameters(request.params.arguments))
+              }]
+            };
+            
+          default:
+            throw new Error(`Unknown tool: ${request.params.name}`);
+        }
+      } catch (error: any) {
+        logger.error('Tool execution error:', error);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              success: false,
+              error: error.message
+            })
+          }],
+          isError: true
+        };
+      }
+    });
+
+    // List available resources
+    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
+      logger.debug('Listing resources');
+      return { resources };
+    });
+
+    // Read resource contents
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      logger.info(`Reading resource: ${request.params.uri}`);
+      return handleResourceRead(request.params.uri);
+    });
   }
 
   /**
-   * List all parameters
+   * Start the server with stdio transport
    */
-  listParameters(): ParameterMetadata[] {
-    return Array.from(this.parameters.values());
+  async start(): Promise<void> {
+    this.transport = new StdioServerTransport();
+    await this.server.connect(this.transport);
+    
+    // Send server_ready notification to C++
+    this.sendToCpp({
+      jsonrpc: '2.0',
+      method: 'server_ready',
+      params: { port: 3000 }
+    });
+    
+    logger.info('MCP Server started with stdio transport');
   }
 
   /**
-   * Get a specific parameter
+   * Stop the server
    */
-  getParameter(name: string): ParameterMetadata {
-    const param = this.parameters.get(name);
-    if (!param) {
-      throw new Error(`Parameter not found: ${name}`);
+  async stop(): Promise<void> {
+    if (this.transport) {
+      await this.server.close();
+      this.transport = null;
     }
-    return param;
+    logger.info('MCP Server stopped');
   }
 
   /**
-   * Set a parameter value (called from HTTP API)
-   * This will be forwarded to C++ via polling
+   * Send a message to C++ via stdout
+   * Messages are newline-delimited JSON
    */
-  setParameter(name: string, value: number): void {
-    if (!this.parameters.has(name)) {
-      // If parameter doesn't exist yet, create a placeholder
-      this.parameters.set(name, {
-        name,
-        display_name: name,
-        value,
-        min: 0,
-        max: 1,
-        default: 0.5,
-        is_automation_parameter: true,
-      });
-    } else {
-      // Update existing parameter
-      const param = this.parameters.get(name)!;
-      param.value = value;
-    }
-
-    // Queue this change for C++ to pick up
-    this.pendingChanges.push({ name, value });
-
-    console.log(`[VitalMcpServer] Parameter set: ${name} = ${value}`);
+  private sendToCpp(message: McpMessage): void {
+    const json = JSON.stringify(message);
+    process.stdout.write(json + '\n');
+    logger.debug('Sent to C++:', json);
   }
 
   /**
-   * Batch set multiple parameters
+   * Listen for messages from C++ via stdin
+   * This allows C++ to send parameter_changed notifications
    */
-  batchSetParameters(parameters: Array<{ name: string; value: number }>): void {
-    for (const param of parameters) {
-      this.setParameter(param.name, param.value);
-    }
+  listenForCppMessages(): void {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      terminal: false
+    });
+
+    rl.on('line', (line: string) => {
+      try {
+        const message: McpMessage = JSON.parse(line);
+        logger.debug('Received from C++:', message);
+        
+        // Handle different message types from C++
+        if (message.method === 'parameter_changed') {
+          // Forward parameter change notifications to MCP clients
+          this.handleParameterChanged(message.params);
+        } else if (message.method === 'ping') {
+          // Respond to heartbeat
+          this.sendToCpp({
+            jsonrpc: '2.0',
+            method: 'pong',
+            params: { id: message.params?.id }
+          });
+        }
+      } catch (error: any) {
+        logger.error('Failed to parse message from C++:', error);
+      }
+    });
+
+    rl.on('close', () => {
+      logger.info('stdin closed, shutting down server');
+      this.stop();
+      process.exit(0);
+    });
   }
 
   /**
-   * Called when C++ notifies us of a parameter change
+   * Handle parameter change notifications from C++
+   * Forward these as notifications to MCP clients
    */
-  onParameterChanged(name: string, value: number): void {
-    if (!this.parameters.has(name)) {
-      // First time seeing this parameter, create it
-      this.parameters.set(name, {
-        name,
-        display_name: name,
-        value,
-        min: 0,
-        max: 1,
-        default: 0.5,
-        is_automation_parameter: true,
-      });
-    } else {
-      // Update existing parameter
-      const param = this.parameters.get(name)!;
-      param.value = value;
-    }
-
-    console.log(`[VitalMcpServer] Parameter changed notification: ${name} = ${value}`);
-  }
-
-  /**
-   * Update parameter metadata from C++
-   */
-  updateParameterMetadata(params: ParameterMetadata[]): void {
-    for (const param of params) {
-      this.parameters.set(param.name, param);
-    }
-    console.log(`[VitalMcpServer] Updated metadata for ${params.length} parameters`);
-  }
-
-  /**
-   * Get pending parameter changes and clear the queue
-   * Called by C++ via polling
-   */
-  getPendingChanges(): Array<{ name: string; value: number }> {
-    const changes = [...this.pendingChanges];
-    this.pendingChanges = [];
-    return changes;
+  private handleParameterChanged(params: any): void {
+    logger.info(`Parameter changed: ${params.name} = ${params.value}`);
+    // Note: Notifications to MCP clients would go through the SDK's notification system
+    // This is a placeholder for the full bidirectional notification implementation
   }
 }

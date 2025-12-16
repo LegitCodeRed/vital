@@ -113,15 +113,15 @@ AboutSection::AboutSection(const String& name) : Overlay(name), body_(Shaders::k
   addAndMakeVisible(enable_mcp_server_.get());
   addOpenGlComponent(enable_mcp_server_->getGlComponent());
 
-  start_mcp_button_ = std::make_unique<OpenGlTextButton>("Start MCP");
-  start_mcp_button_->setUiButton(true);
-  start_mcp_button_->addListener(this);
+  start_mcp_button_ = std::make_unique<OpenGlToggleButton>("Start MCP");
+  start_mcp_button_.get()->setUiButton(true);
+  start_mcp_button_.get()->addListener(this);
   addAndMakeVisible(start_mcp_button_.get());
   addOpenGlComponent(start_mcp_button_->getGlComponent());
 
-  stop_mcp_button_ = std::make_unique<OpenGlTextButton>("Stop MCP");
-  stop_mcp_button_->setUiButton(true);
-  stop_mcp_button_->addListener(this);
+  stop_mcp_button_ = std::make_unique<OpenGlToggleButton>("Stop MCP");
+  stop_mcp_button_.get()->setUiButton(true);
+  stop_mcp_button_.get()->addListener(this);
   addAndMakeVisible(stop_mcp_button_.get());
   addOpenGlComponent(stop_mcp_button_->getGlComponent());
 
@@ -394,23 +394,23 @@ void AboutSection::updateMcpStatus() {
   switch (status) {
     case vital::McpServerStatus::Stopped:
       status_text = "MCP: Stopped";
-      start_mcp_button_->setEnabled(enable_mcp_server_->getToggleState());
-      stop_mcp_button_->setEnabled(false);
+      start_mcp_button_.get()->setEnabled(enable_mcp_server_->getToggleState());
+      stop_mcp_button_.get()->setEnabled(false);
       break;
     case vital::McpServerStatus::Starting:
       status_text = "MCP: Starting...";
-      start_mcp_button_->setEnabled(false);
-      stop_mcp_button_->setEnabled(true);
+      start_mcp_button_.get()->setEnabled(false);
+      stop_mcp_button_.get()->setEnabled(true);
       break;
     case vital::McpServerStatus::Running:
       status_text = "MCP: Running (Port " + String(mcp_manager->getPort()) + ")";
-      start_mcp_button_->setEnabled(false);
-      stop_mcp_button_->setEnabled(true);
+      start_mcp_button_.get()->setEnabled(false);
+      stop_mcp_button_.get()->setEnabled(true);
       break;
     case vital::McpServerStatus::Error:
       status_text = "MCP: Error - " + mcp_manager->getLastError();
-      start_mcp_button_->setEnabled(enable_mcp_server_->getToggleState());
-      stop_mcp_button_->setEnabled(false);
+      start_mcp_button_.get()->setEnabled(enable_mcp_server_->getToggleState());
+      stop_mcp_button_.get()->setEnabled(false);
       break;
   }
 

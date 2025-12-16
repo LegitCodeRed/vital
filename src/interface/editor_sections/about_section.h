@@ -101,8 +101,8 @@ class AboutSection : public Overlay, public vital::McpServerManager::Listener {
     // MCP Server Controls
     std::unique_ptr<OpenGlToggleButton> enable_mcp_server_;
     std::unique_ptr<PlainTextComponent> enable_mcp_text_;
-    std::unique_ptr<OpenGlTextButton> start_mcp_button_;
-    std::unique_ptr<OpenGlTextButton> stop_mcp_button_;
+    std::unique_ptr<OpenGlToggleButton> start_mcp_button_;
+    std::unique_ptr<OpenGlToggleButton> stop_mcp_button_;
     std::unique_ptr<PlainTextComponent> mcp_status_text_;
     std::unique_ptr<PlainTextComponent> mcp_port_label_;
 

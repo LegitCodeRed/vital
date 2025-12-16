@@ -73,12 +73,15 @@ void McpParameterBridge::onParameterChanged(const std::string& name, mono_float 
     }
   }
 
-  // Send parameter change notification to MCP server
-  String json_body = "{\"name\":\"" + String(name.c_str()) +
-                     "\",\"value\":" + String(value, 6) + "}";
+  // Send parameter change notification to MCP server via stdio
+  McpMessage msg;
+  msg.jsonrpc = "2.0";
+  msg.method = "parameter_changed";
+  msg.params = "{\"name\":\"" + String(name.c_str()) +
+               "\",\"value\":" + String(value, 6) + "}";
+  msg.is_response = false;
 
-  // Send asynchronously via POST to /api/notify/parameter_changed
-  mcp_manager_->httpPost("/api/notify/parameter_changed", json_body);
+  mcp_manager_->sendMessage(msg);
 }
 
 void McpParameterBridge::sendAllParameterMetadata() {
