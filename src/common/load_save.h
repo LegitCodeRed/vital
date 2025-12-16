@@ -131,6 +131,10 @@ class LoadSave {
     static void saveVersionConfig();
     static void saveContentVersion(std::string version);
     static void saveUpdateCheckConfig(bool check_for_updates);
+    static bool shouldEnableMcpServer();
+    static void saveMcpServerEnabled(bool enabled);
+    static int getMcpServerPort();
+    static void saveMcpServerPort(int port);
     static void saveWorkOffline(bool work_offline);
     static void saveLoadedSkin(const std::string& name);
     static void saveAnimateWidgets(bool animate_widgets);

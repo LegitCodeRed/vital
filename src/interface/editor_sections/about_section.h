@@ -20,6 +20,7 @@
 #include "overlay.h"
 #include "open_gl_multi_quad.h"
 #include "open_gl_image_component.h"
+#include "mcp/mcp_server_manager.h"
 
 class AppLogo;
 
@@ -50,7 +51,7 @@ class OpenGlDeviceSelector : public OpenGlAutoImageComponent<AudioDeviceSelector
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenGlDeviceSelector)
 };
 
-class AboutSection : public Overlay {
+class AboutSection : public Overlay, public vital::McpServerManager::Listener {
   public:
     static constexpr int kInfoWidth = 430;
     static constexpr int kBasicInfoHeight = 250;
@@ -83,13 +84,27 @@ class AboutSection : public Overlay {
     void setVisible(bool should_be_visible) override;
     void buttonClicked(Button* clicked_button) override;
 
+    // MCP Server Manager Listener
+    void mcpServerStatusChanged(vital::McpServerStatus new_status, const String& error_message) override;
+
   private:
+    void updateMcpStatus();
+    void startMcpServer();
+    void stopMcpServer();
     void setGuiSize(float multiplier);
     void fullScreen();
 
     std::unique_ptr<OpenGlDeviceSelector> device_selector_;
     std::unique_ptr<OpenGlToggleButton> check_for_updates_;
     std::unique_ptr<PlainTextComponent> check_for_updates_text_;
+
+    // MCP Server Controls
+    std::unique_ptr<OpenGlToggleButton> enable_mcp_server_;
+    std::unique_ptr<PlainTextComponent> enable_mcp_text_;
+    std::unique_ptr<OpenGlTextButton> start_mcp_button_;
+    std::unique_ptr<OpenGlTextButton> stop_mcp_button_;
+    std::unique_ptr<PlainTextComponent> mcp_status_text_;
+    std::unique_ptr<PlainTextComponent> mcp_port_label_;
 
     std::unique_ptr<OpenGlToggleButton> size_button_extra_small_;
     std::unique_ptr<OpenGlToggleButton> size_button_small_;

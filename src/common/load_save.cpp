@@ -1307,6 +1307,18 @@ void LoadSave::saveUpdateCheckConfig(bool check_for_updates) {
   saveJsonToConfig(data);
 }
 
+void LoadSave::saveMcpServerEnabled(bool enabled) {
+  json data = getConfigJson();
+  data["mcp_server_enabled"] = enabled;
+  saveJsonToConfig(data);
+}
+
+void LoadSave::saveMcpServerPort(int port) {
+  json data = getConfigJson();
+  data["mcp_server_port"] = port;
+  saveJsonToConfig(data);
+}
+
 void LoadSave::saveWorkOffline(bool work_offline) {
   json data = getConfigJson();
   data["work_offline"] = work_offline;
@@ -1574,6 +1586,24 @@ bool LoadSave::shouldCheckForUpdates() {
     return true;
 
   return data["check_for_updates"];
+}
+
+bool LoadSave::shouldEnableMcpServer() {
+  json data = getConfigJson();
+
+  if (!data.count("mcp_server_enabled"))
+    return false;
+
+  return data["mcp_server_enabled"];
+}
+
+int LoadSave::getMcpServerPort() {
+  json data = getConfigJson();
+
+  if (!data.count("mcp_server_port"))
+    return 3000;
+
+  return data["mcp_server_port"];
 }
 
 bool LoadSave::shouldWorkOffline() {

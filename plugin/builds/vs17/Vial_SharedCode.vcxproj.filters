@@ -3228,6 +3228,9 @@
     <ClCompile Include="..\..\..\src\common\mcp\mcp_server_manager.cpp">
       <Filter>Common\mcp</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\..\src\common\mcp\mcp_parameter_bridge.cpp">
+      <Filter>Common\mcp</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\..\src\common\wavetable\file_source.h">
@@ -6342,6 +6345,9 @@
       <Filter>Common\mcp</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\src\common\mcp\mcp_types.h">
+      <Filter>Common\mcp</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\src\common\mcp\mcp_parameter_bridge.h">
       <Filter>Common\mcp</Filter>
     </ClInclude>
   </ItemGroup>

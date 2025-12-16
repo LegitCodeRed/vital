@@ -99,9 +99,57 @@ AboutSection::AboutSection(const String& name) : Overlay(name), body_(Shaders::k
   addAndMakeVisible(size_button_quadruple_.get());
   addOpenGlComponent(size_button_quadruple_->getGlComponent());
   size_button_quadruple_->addListener(this);
+
+  // MCP Server Controls
+  enable_mcp_text_ = std::make_unique<PlainTextComponent>("Enable MCP Server", String("Enable MCP Server"));
+  addOpenGlComponent(enable_mcp_text_.get());
+  enable_mcp_text_->setFontType(PlainTextComponent::kLight);
+  enable_mcp_text_->setTextSize(14.0f);
+  enable_mcp_text_->setJustification(Justification::centredLeft);
+
+  enable_mcp_server_ = std::make_unique<OpenGlToggleButton>("");
+  enable_mcp_server_->setToggleState(LoadSave::shouldEnableMcpServer(), NotificationType::dontSendNotification);
+  enable_mcp_server_->addListener(this);
+  addAndMakeVisible(enable_mcp_server_.get());
+  addOpenGlComponent(enable_mcp_server_->getGlComponent());
+
+  start_mcp_button_ = std::make_unique<OpenGlTextButton>("Start MCP");
+  start_mcp_button_->setUiButton(true);
+  start_mcp_button_->addListener(this);
+  addAndMakeVisible(start_mcp_button_.get());
+  addOpenGlComponent(start_mcp_button_->getGlComponent());
+
+  stop_mcp_button_ = std::make_unique<OpenGlTextButton>("Stop MCP");
+  stop_mcp_button_->setUiButton(true);
+  stop_mcp_button_->addListener(this);
+  addAndMakeVisible(stop_mcp_button_.get());
+  addOpenGlComponent(stop_mcp_button_->getGlComponent());
+
+  mcp_status_text_ = std::make_unique<PlainTextComponent>("MCP Status", String("MCP: Stopped"));
+  addOpenGlComponent(mcp_status_text_.get());
+  mcp_status_text_->setFontType(PlainTextComponent::kLight);
+  mcp_status_text_->setTextSize(12.0f);
+  mcp_status_text_->setJustification(Justification::centredLeft);
+
+  mcp_port_label_ = std::make_unique<PlainTextComponent>("MCP Port", String("Port: 3000"));
+  addOpenGlComponent(mcp_port_label_.get());
+  mcp_port_label_->setFontType(PlainTextComponent::kLight);
+  mcp_port_label_->setTextSize(12.0f);
+  mcp_port_label_->setJustification(Justification::centredLeft);
+
+  // Register as MCP status listener
+  vital::McpServerManager* mcp_manager = vital::McpServerManager::getInstance();
+  if (mcp_manager) {
+    mcp_manager->addListener(this);
+  }
 }
 
-AboutSection::~AboutSection() = default;
+AboutSection::~AboutSection() {
+  vital::McpServerManager* mcp_manager = vital::McpServerManager::getInstance();
+  if (mcp_manager) {
+    mcp_manager->removeListener(this);
+  }
+}
 
 void AboutSection::setLogoBounds() {
   Rectangle<int> info_rect = getInfoRect();
@@ -167,7 +215,31 @@ void AboutSection::resized() {
   check_for_updates_text_->setBounds(check_for_updates_->getRight() + size_padding, check_for_updates_->getY(),
                                      check_for_updates_width, check_updates_height);
 
-  int size_y = check_for_updates_->getBottom() + padding_y;
+  // MCP Server Controls
+  Colour body_text_color = findColour(Skin::kBodyText, true);
+  enable_mcp_text_->setColor(body_text_color);
+  mcp_status_text_->setColor(body_text_color);
+  mcp_port_label_->setColor(body_text_color);
+
+  int mcp_y = check_for_updates_->getBottom() + padding_y;
+  enable_mcp_server_->setBounds(info_rect.getX() + padding_x, mcp_y, check_updates_height, check_updates_height);
+  enable_mcp_text_->setBounds(enable_mcp_server_->getRight() + size_padding, mcp_y,
+                               check_for_updates_width, check_updates_height);
+
+  int button_width = (info_rect.getWidth() - 4 * padding_x) / 2;
+  int mcp_buttons_y = enable_mcp_server_->getBottom() + size_padding;
+  start_mcp_button_->setBounds(info_rect.getX() + padding_x, mcp_buttons_y,
+                                button_width, button_height * 0.8f);
+  stop_mcp_button_->setBounds(start_mcp_button_->getRight() + size_padding, mcp_buttons_y,
+                               button_width, button_height * 0.8f);
+
+  int mcp_status_y = start_mcp_button_->getBottom() + size_padding;
+  mcp_status_text_->setBounds(info_rect.getX() + padding_x, mcp_status_y,
+                               info_rect.getWidth() / 2, check_updates_height);
+  mcp_port_label_->setBounds(info_rect.getX() + info_rect.getWidth() / 2, mcp_status_y,
+                              info_rect.getWidth() / 2 - padding_x, check_updates_height);
+
+  int size_y = mcp_status_text_->getBottom() + padding_y;
 
   int index = 0;
   for (OpenGlToggleButton* size_button : size_buttons) {
@@ -224,8 +296,16 @@ void AboutSection::setVisible(bool should_be_visible) {
 void AboutSection::buttonClicked(Button* clicked_button) {
   if (clicked_button == check_for_updates_.get())
     LoadSave::saveUpdateCheckConfig(check_for_updates_->getToggleState());
+  else if (clicked_button == enable_mcp_server_.get()) {
+    LoadSave::saveMcpServerEnabled(enable_mcp_server_->getToggleState());
+    updateMcpStatus();
+  }
+  else if (clicked_button == start_mcp_button_.get())
+    startMcpServer();
+  else if (clicked_button == stop_mcp_button_.get())
+    stopMcpServer();
   else if (clicked_button == size_button_extra_small_.get())
-    setGuiSize(kMultExtraSmall); 
+    setGuiSize(kMultExtraSmall);
   else if (clicked_button == size_button_small_.get())
     setGuiSize(kMultSmall);
   else if (clicked_button == size_button_normal_.get())
@@ -268,4 +348,79 @@ void AboutSection::fullScreen() {
     Desktop::getInstance().setKioskModeComponent(nullptr);
   else
     Desktop::getInstance().setKioskModeComponent(getTopLevelComponent());
+}
+
+void AboutSection::startMcpServer() {
+  vital::McpServerManager* mcp_manager = vital::McpServerManager::getInstance();
+  if (!mcp_manager) {
+    return;
+  }
+
+  if (mcp_manager->startServer()) {
+    // Enable MCP bridge in synth
+    SynthGuiInterface* parent = findParentComponentOfClass<SynthGuiInterface>();
+    if (parent && parent->getSynth()) {
+      parent->getSynth()->enableMcpBridge(true);
+    }
+  }
+  updateMcpStatus();
+}
+
+void AboutSection::stopMcpServer() {
+  vital::McpServerManager* mcp_manager = vital::McpServerManager::getInstance();
+  if (!mcp_manager) {
+    return;
+  }
+
+  // Disable MCP bridge in synth
+  SynthGuiInterface* parent = findParentComponentOfClass<SynthGuiInterface>();
+  if (parent && parent->getSynth()) {
+    parent->getSynth()->enableMcpBridge(false);
+  }
+
+  mcp_manager->stopServer();
+  updateMcpStatus();
+}
+
+void AboutSection::updateMcpStatus() {
+  vital::McpServerManager* mcp_manager = vital::McpServerManager::getInstance();
+  if (!mcp_manager) {
+    return;
+  }
+
+  vital::McpServerStatus status = mcp_manager->getStatus();
+  String status_text;
+
+  switch (status) {
+    case vital::McpServerStatus::Stopped:
+      status_text = "MCP: Stopped";
+      start_mcp_button_->setEnabled(enable_mcp_server_->getToggleState());
+      stop_mcp_button_->setEnabled(false);
+      break;
+    case vital::McpServerStatus::Starting:
+      status_text = "MCP: Starting...";
+      start_mcp_button_->setEnabled(false);
+      stop_mcp_button_->setEnabled(true);
+      break;
+    case vital::McpServerStatus::Running:
+      status_text = "MCP: Running (Port " + String(mcp_manager->getPort()) + ")";
+      start_mcp_button_->setEnabled(false);
+      stop_mcp_button_->setEnabled(true);
+      break;
+    case vital::McpServerStatus::Error:
+      status_text = "MCP: Error - " + mcp_manager->getLastError();
+      start_mcp_button_->setEnabled(enable_mcp_server_->getToggleState());
+      stop_mcp_button_->setEnabled(false);
+      break;
+  }
+
+  mcp_status_text_->setText(status_text);
+  mcp_port_label_->setText("Port: " + String(mcp_manager->getPort()));
+}
+
+void AboutSection::mcpServerStatusChanged(vital::McpServerStatus new_status, const String& error_message) {
+  // Update status on message thread
+  MessageManager::callAsync([this]() {
+    updateMcpStatus();
+  });
 }

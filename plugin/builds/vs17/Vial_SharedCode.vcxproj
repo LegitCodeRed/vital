@@ -132,6 +132,7 @@
     </Bscmake>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\..\src\common\mcp\mcp_parameter_bridge.cpp" />
     <ClCompile Include="..\..\..\src\common\mcp\mcp_server_manager.cpp" />
     <ClCompile Include="..\..\..\src\common\wavetable\file_source.cpp">
       <ExcludedFromBuild>true</ExcludedFromBuild>
@@ -2753,6 +2754,7 @@
     <ClCompile Include="..\..\JuceLibraryCode\include_juce_opengl.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\..\src\common\mcp\mcp_parameter_bridge.h" />
     <ClInclude Include="..\..\..\src\common\mcp\mcp_server_manager.h" />
     <ClInclude Include="..\..\..\src\common\mcp\mcp_types.h" />
     <ClInclude Include="..\..\..\src\common\wavetable\file_source.h" />

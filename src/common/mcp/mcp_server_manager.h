@@ -79,6 +79,15 @@ public:
   Time getLastHeartbeatTime() const { return last_heartbeat_; }
   int getRestartCount() const { return restart_count_; }
 
+  /**
+   * HTTP helpers (public for use by McpParameterBridge)
+   */
+  String httpPost(const String& endpoint, const String& json_body);
+  String httpGet(const String& endpoint);
+
+  // Singleton declaration (must be public to access getInstance())
+  JUCE_DECLARE_SINGLETON(McpServerManager, false)
+
 private:
   McpServerManager();
   ~McpServerManager() override;
@@ -108,10 +117,6 @@ private:
   // Status updates
   void setStatus(McpServerStatus new_status, const String& error = String());
   void notifyListeners();
-
-  // HTTP helpers
-  String httpPost(const String& endpoint, const String& json_body);
-  String httpGet(const String& endpoint);
 
   // Process and communication
   std::unique_ptr<ChildProcess> server_process_;
@@ -151,7 +156,6 @@ private:
   static constexpr int kMaxRestartDelay = 30;          // Max 30s restart delay
   static constexpr int kBaseRestartDelay = 1;          // Start with 1s delay
 
-  JUCE_DECLARE_SINGLETON(McpServerManager, false)
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(McpServerManager)
 };
 
