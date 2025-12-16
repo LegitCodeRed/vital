@@ -34,11 +34,6 @@ namespace vital {
 class McpServerManager : public Timer, public DeletedAtShutdown {
 public:
   /**
-   * Get the singleton instance
-   */
-  static McpServerManager* getInstance();
-
-  /**
    * Lifecycle management
    */
   bool startServer();
@@ -114,6 +109,10 @@ private:
   void setStatus(McpServerStatus new_status, const String& error = String());
   void notifyListeners();
 
+  // HTTP helpers
+  String httpPost(const String& endpoint, const String& json_body);
+  String httpGet(const String& endpoint);
+
   // Process and communication
   std::unique_ptr<ChildProcess> server_process_;
   MemoryOutputStream stdout_buffer_;
@@ -152,6 +151,7 @@ private:
   static constexpr int kMaxRestartDelay = 30;          // Max 30s restart delay
   static constexpr int kBaseRestartDelay = 1;          // Start with 1s delay
 
+  JUCE_DECLARE_SINGLETON(McpServerManager, false)
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(McpServerManager)
 };
 

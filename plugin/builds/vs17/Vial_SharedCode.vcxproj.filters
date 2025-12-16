@@ -553,6 +553,12 @@
     <Filter Include="JUCE Library Code">
       <UniqueIdentifier>{7ED5A90E-41AF-A1EF-659B-37CEEAB9BA61}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Common">
+      <UniqueIdentifier>{03216ec8-2097-4a29-a8cc-49e9c2b14aba}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Common\mcp">
+      <UniqueIdentifier>{faf990cc-48db-4cf3-a5a3-7ecc8b0af5da}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\..\src\common\wavetable\file_source.cpp">
@@ -3218,6 +3224,9 @@
     </ClCompile>
     <ClCompile Include="..\..\JuceLibraryCode\include_juce_opengl.cpp">
       <Filter>JUCE Library Code</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\src\common\mcp\mcp_server_manager.cpp">
+      <Filter>Common\mcp</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -6328,6 +6337,12 @@
     </ClInclude>
     <ClInclude Include="..\..\JuceLibraryCode\JucePluginDefines.h">
       <Filter>JUCE Library Code</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\src\common\mcp\mcp_server_manager.h">
+      <Filter>Common\mcp</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\src\common\mcp\mcp_types.h">
+      <Filter>Common\mcp</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

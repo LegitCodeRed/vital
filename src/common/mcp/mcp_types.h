@@ -89,19 +89,19 @@ struct McpMessage {
       msg.id = j.value("id", "");
 
       // Check if this is a response (has result or error)
-      if (j.contains("result") || j.contains("error")) {
+      if (j.count("result") > 0 || j.count("error") > 0) {
         msg.is_response = true;
-        if (j.contains("result")) {
+        if (j.count("result") > 0) {
           msg.result = j["result"];
         }
-        if (j.contains("error")) {
+        if (j.count("error") > 0) {
           msg.error = j["error"];
         }
       } else {
         // Request or notification
         msg.is_response = false;
         msg.method = j.value("method", "");
-        if (j.contains("params")) {
+        if (j.count("params") > 0) {
           msg.params = j["params"];
         }
       }

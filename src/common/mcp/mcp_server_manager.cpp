@@ -20,7 +20,7 @@
 namespace vital {
 
 // Singleton instance
-juce_ImplementSingleton(McpServerManager)
+JUCE_IMPLEMENT_SINGLETON(McpServerManager)
 
 McpServerManager::McpServerManager()
     : port_(3000),
@@ -45,10 +45,6 @@ McpServerManager::McpServerManager()
 McpServerManager::~McpServerManager() {
   stopServer();
   clearSingletonInstance();
-}
-
-McpServerManager* McpServerManager::getInstance() {
-  return McpServerManager::getInstanceWithoutCreating();
 }
 
 // ============================================================================
@@ -227,14 +223,8 @@ bool McpServerManager::spawnProcess() {
 
 void McpServerManager::killProcess() {
   if (server_process_) {
-    // Try graceful shutdown first
-    McpMessage shutdown = McpMessage::createNotification("shutdown", nlohmann::json());
-    String json_str = String(shutdown.toJson().c_str()) + "\n";
-    server_process_->writeToStdin(json_str.toUTF8(), json_str.getNumBytesAsUTF8());
-
-    // Wait 1 second for graceful shutdown
-    Thread::sleep(1000);
-
+    // TODO: Implement graceful shutdown via ChildProcessMaster
+    // For now, just kill the process
     if (server_process_->isRunning()) {
       server_process_->kill();
     }
@@ -280,19 +270,11 @@ int McpServerManager::calculateRestartDelay() const {
 // ============================================================================
 
 void McpServerManager::processStdout() {
-  if (!server_process_) {
-    return;
-  }
-
-  char buffer[4096];
-  int bytes_read = server_process_->readProcessOutput(buffer, sizeof(buffer));
-
-  if (bytes_read > 0) {
-    stdout_buffer_.write(buffer, bytes_read);
-
-    // Parse complete lines
-    String output = stdout_buffer_.toString();
-    parseMessages(output);
+  // No longer needed with HTTP communication
+  // Keep reading to prevent buffer overflow, but don't parse
+  if (server_process_) {
+    char buffer[4096];
+    server_process_->readProcessOutput(buffer, sizeof(buffer));
   }
 }
 
@@ -301,56 +283,21 @@ void McpServerManager::processStdin() {
     return;
   }
 
-  // Send up to 10 messages per timer tick to avoid blocking
+  // Send outgoing messages via HTTP POST (synchronous for simplicity)
   for (int i = 0; i < 10; ++i) {
     McpMessage msg;
     if (!outgoing_queue_.try_dequeue(msg)) {
       break;
     }
 
-    String json_str = String(msg.toJson().c_str()) + "\n";
-    server_process_->writeToStdin(json_str.toUTF8(), json_str.getNumBytesAsUTF8());
+    // Build JSON body and send via HTTP
+    String json_body = String(msg.toJson().c_str());
+    httpPost("/api/rpc", json_body);
   }
 }
 
 void McpServerManager::parseMessages(const String& output) {
-  StringArray lines;
-  lines.addTokens(incomplete_line_ + output, "\n", "");
-
-  // Process all complete lines except the last (which might be incomplete)
-  for (int i = 0; i < lines.size() - 1; ++i) {
-    String line = lines[i].trim();
-    if (line.isEmpty()) {
-      continue;
-    }
-
-    try {
-      McpMessage msg = McpMessage::fromJson(line.toStdString());
-
-      // Handle special messages
-      if (msg.method == "server_ready") {
-        setStatus(McpServerStatus::Running);
-        restart_attempts_ = 0;  // Reset on successful start
-      } else if (msg.method == "pong" && msg.is_response) {
-        // Heartbeat response
-        last_heartbeat_ = Time::getCurrentTime();
-        pending_heartbeat_id_.clear();
-      } else {
-        // Enqueue for processing
-        incoming_queue_.enqueue(msg);
-      }
-    } catch (...) {
-      // Invalid JSON, skip
-    }
-  }
-
-  // Save incomplete line for next iteration
-  if (!lines.isEmpty()) {
-    incomplete_line_ = lines[lines.size() - 1];
-  }
-
-  // Clear buffer
-  stdout_buffer_.reset();
+  // No longer used with HTTP communication
 }
 
 // ============================================================================
@@ -403,9 +350,20 @@ String McpServerManager::getServerScriptPath() {
 // ============================================================================
 
 void McpServerManager::sendHeartbeat() {
-  pending_heartbeat_id_ = "hb-" + String(Time::getCurrentTime().toMilliseconds());
-  McpMessage ping = McpMessage::createRequest("ping", nlohmann::json(), pending_heartbeat_id_.toStdString());
-  sendMessage(ping);
+  // Send HTTP heartbeat to check if server is alive
+  String response = httpPost("/api/heartbeat", "{}");
+
+  if (response.isNotEmpty()) {
+    last_heartbeat_ = Time::getCurrentTime();
+    pending_heartbeat_id_.clear();
+
+    // If we were starting, mark as running now
+    if (status_.load() == McpServerStatus::Starting) {
+      setStatus(McpServerStatus::Running);
+      restart_attempts_ = 0;
+    }
+  }
+
   last_heartbeat_sent_ = Time::getCurrentTime();
 }
 
@@ -437,6 +395,61 @@ void McpServerManager::notifyListeners() {
   listeners_.call([this](Listener& l) {
     l.mcpServerStatusChanged(status_.load(), getLastError());
   });
+}
+
+// ============================================================================
+// HTTP Helpers
+// ============================================================================
+
+String McpServerManager::httpPost(const String& endpoint, const String& json_body) {
+  String url_str = "http://localhost:" + String(port_) + endpoint;
+  URL url = url_str;
+
+  // Add POST data to URL
+  url = url.withPOSTData(json_body);
+
+  // Create input stream with JUCE 5 API
+  std::unique_ptr<InputStream> stream = url.createInputStream(
+    true,  // doPostLikeRequest
+    nullptr,  // progressCallback
+    nullptr,  // progressCallbackContext
+    "Content-Type: application/json\r\n",  // extraHeaders
+    5000,  // connectionTimeOutMs
+    nullptr,  // responseHeaders
+    nullptr,  // statusCode
+    0,  // numRedirectsToFollow
+    "POST"  // httpRequestCmd
+  );
+
+  if (stream != nullptr) {
+    return stream->readEntireStreamAsString();
+  }
+
+  return String();
+}
+
+String McpServerManager::httpGet(const String& endpoint) {
+  String url_str = "http://localhost:" + String(port_) + endpoint;
+  URL url = url_str;
+
+  // Create input stream with JUCE 5 API
+  std::unique_ptr<InputStream> stream = url.createInputStream(
+    false,  // doPostLikeRequest
+    nullptr,  // progressCallback
+    nullptr,  // progressCallbackContext
+    String(),  // extraHeaders
+    5000,  // connectionTimeOutMs
+    nullptr,  // responseHeaders
+    nullptr,  // statusCode
+    0,  // numRedirectsToFollow
+    "GET"  // httpRequestCmd
+  );
+
+  if (stream != nullptr) {
+    return stream->readEntireStreamAsString();
+  }
+
+  return String();
 }
 
 } // namespace vital

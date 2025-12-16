@@ -36,6 +36,7 @@ namespace vital {
   class Sample;
   class WaveFrame;
   class Wavetable;
+  class McpParameterBridge;
 }
 
 class SynthGuiInterface;
@@ -94,6 +95,10 @@ class SynthBase : public MidiManager::Listener {
     virtual void beginChangeGesture(const std::string& name) { }
     virtual void endChangeGesture(const std::string& name) { }
     virtual void setValueNotifyHost(const std::string& name, vital::mono_float value) { }
+
+    void enableMcpBridge(bool enable);
+    bool isMcpBridgeEnabled() const;
+    vital::McpParameterBridge* getMcpBridge() { return mcp_bridge_.get(); }
 
     void armMidiLearn(const std::string& name);
     void cancelMidiLearn();
@@ -186,6 +191,8 @@ class SynthBase : public MidiManager::Listener {
     moodycamel::ConcurrentQueue<vital::control_change> value_change_queue_;
     moodycamel::ConcurrentQueue<vital::modulation_change> modulation_change_queue_;
     Tuning tuning_;
+
+    std::unique_ptr<vital::McpParameterBridge> mcp_bridge_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthBase)
 };

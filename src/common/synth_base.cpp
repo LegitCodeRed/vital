@@ -25,6 +25,7 @@
 #include "synth_gui_interface.h"
 #include "synth_parameters.h"
 #include "utils.h"
+#include "mcp/mcp_parameter_bridge.h"
 
 SynthBase::SynthBase() : expired_(false) {
   expired_ = LoadSave::isExpired();
@@ -46,6 +47,9 @@ SynthBase::SynthBase() : expired_(false) {
 
   keyboard_state_ = std::make_unique<MidiKeyboardState>();
   midi_manager_ = std::make_unique<MidiManager>(this, keyboard_state_.get(), &save_info_, this);
+
+  // Initialize MCP parameter bridge
+  mcp_bridge_ = std::make_unique<vital::McpParameterBridge>(this);
 
   last_played_note_ = 0.0f;
   last_num_pressed_ = 0;
@@ -111,6 +115,11 @@ void SynthBase::valueChangedExternal(const std::string& name, vital::mono_float 
     engine_->setModWheelAllChannels(value);
   else if (name == "pitch_wheel")
     engine_->setZonedPitchWheel(value, 0, vital::kNumMidiChannels - 1);
+
+  // Notify MCP bridge of parameter change
+  if (mcp_bridge_ && mcp_bridge_->isRunning()) {
+    mcp_bridge_->onParameterChanged(name, value);
+  }
 
   ValueChangedCallback* callback = new ValueChangedCallback(self_reference_, name, value);
   callback->post();
@@ -575,6 +584,22 @@ bool SynthBase::saveToActiveFile() {
 
 void SynthBase::setMpeEnabled(bool enabled) {
   midi_manager_->setMpeEnabled(enabled);
+}
+
+void SynthBase::enableMcpBridge(bool enable) {
+  if (!mcp_bridge_) {
+    return;
+  }
+
+  if (enable) {
+    mcp_bridge_->start();
+  } else {
+    mcp_bridge_->stop();
+  }
+}
+
+bool SynthBase::isMcpBridgeEnabled() const {
+  return mcp_bridge_ && mcp_bridge_->isRunning();
 }
 
 void SynthBase::processAudio(AudioSampleBuffer* buffer, int channels, int samples, int offset) {
