@@ -1,0 +1,33 @@
+ I found the problem! The McpParameterBridge is trying to use HTTP (httpPost) to communicate with the MCP server, but we set up the server to use stdio transport (stdin/stdout). This mismatch is causing the crash.
+
+  Let me fix the McpParameterBridge to use stdio messaging instead:
+
+● Read(src\common\mcp\mcp_parameter_bridge.cpp)
+  ⎿  Read 130 lines
+
+● Now I need to rewrite the McpParameterBridge to use stdio messaging instead of HTTP. Let me update it:
+
+● Update(src\common\mcp\mcp_parameter_bridge.cpp)
+  ⎿  Added 8 lines, removed 5 lines
+       73        }
+       74      }
+       75
+       76 -    // Send parameter change notification to MCP server
+       77 -    String json_body = "{\"name\":\"" + String(name.c_str()) +
+       78 -                       "\",\"value\":" + String(value, 6) + "}";
+       76 +    // Send parameter change notification to MCP server via stdio
+       77 +    McpMessage msg;
+       78 +    msg.jsonrpc = "2.0";
+       79 +    msg.method = "parameter_changed";
+       80 +    msg.params = "{\"name\":\"" + String(name.c_str()) +
+       81 +                 "\",\"value\":" + String(value, 6) + "}";
+       82 +    msg.is_response = false;
+       83
+       84 -    // Send asynchronously via POST to /api/notify/parameter_changed
+       85 -    mcp_manager_->httpPost("/api/notify/parameter_changed", json_body);
+       84 +    mcp_manager_->sendMessage(msg);
+       85    }
+       86
+       87    void McpParameterBridge::sendAllParameterMetadata() {
+  ⎿  Limit reached · resets 12am (Europe/Berlin) · /upgrade to Max or turn on /extra-usage
+     Opening your options…
