@@ -356,6 +356,9 @@ void AboutSection::startMcpServer() {
     return;
   }
 
+  // Start server on message thread (spawning process is fast and non-blocking)
+  DBG("AboutSection: Starting MCP server...");
+
   if (mcp_manager->startServer()) {
     // Enable MCP bridge in synth
     SynthGuiInterface* parent = findParentComponentOfClass<SynthGuiInterface>();
@@ -363,6 +366,8 @@ void AboutSection::startMcpServer() {
       parent->getSynth()->enableMcpBridge(true);
     }
   }
+
+  // Update status to show "Starting..." or error
   updateMcpStatus();
 }
 

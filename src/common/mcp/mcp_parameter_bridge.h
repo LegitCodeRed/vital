@@ -19,6 +19,7 @@
 #include "JuceHeader.h"
 #include "mcp_server_manager.h"
 #include "synth_parameters.h"
+#include "json/json.h"
 #include <set>
 
 class SynthBase;
@@ -72,8 +73,8 @@ private:
   // Send parameter metadata to MCP server
   void sendParameterMetadata(const std::string& name, const ValueDetails& details);
 
-  // Convert ValueDetails to JSON
-  String parameterDetailsToJson(const std::string& name, const ValueDetails& details, mono_float current_value);
+  // Convert ValueDetails to JSON object
+  nlohmann::json parameterDetailsToJsonObject(const std::string& name, const ValueDetails& details, mono_float current_value);
 
   SynthBase* synth_base_;
   McpServerManager* mcp_manager_;
@@ -87,7 +88,7 @@ private:
   bool metadata_sent_;
 
   // Poll interval
-  static constexpr int kPollIntervalMs = 100;  // Poll every 100ms
+  static constexpr int kPollIntervalMs = 1000;  // Poll every 1 second (async now, so can be less frequent)
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(McpParameterBridge)
 };

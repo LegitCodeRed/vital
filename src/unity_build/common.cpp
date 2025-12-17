@@ -43,3 +43,5 @@
 #include "pitch_detector.cpp"
 #include "wave_warp_modifier.cpp"
 #include "slew_limit_modifier.cpp"
+#include "mcp/mcp_server_manager.cpp"
+#include "mcp/mcp_parameter_bridge.cpp"

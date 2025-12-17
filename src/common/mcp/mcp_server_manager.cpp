@@ -33,13 +33,37 @@ McpServerManager::McpServerManager()
 
   // Find Node.js executable on startup
   node_path_ = findNodeExecutable();
+  DBG("MCP Server Manager: Node.js found at: " + node_path_);
 
-  // Set server script path relative to this file
-  server_script_path_ = File::getSpecialLocation(File::currentExecutableFile)
-                            .getParentDirectory()
-                            .getChildFile("mcp_server")
-                            .getChildFile("build")
-                            .getChildFile("index.js");
+  // Try to find server script in multiple locations
+  File exe_dir = File::getSpecialLocation(File::currentExecutableFile).getParentDirectory();
+  DBG("MCP Server Manager: Executable directory: " + exe_dir.getFullPathName());
+
+  // First try: relative to executable (for deployed builds)
+  server_script_path_ = exe_dir.getChildFile("mcp_server").getChildFile("build").getChildFile("index.js");
+  DBG("MCP Server Manager: Trying path 1: " + server_script_path_.getFullPathName());
+
+  // Second try: go up to find source root (for development builds)
+  if (!server_script_path_.existsAsFile()) {
+    DBG("MCP Server Manager: Path 1 not found, trying source tree...");
+
+    // Try going up directories to find the vital root
+    File current = exe_dir;
+    for (int i = 0; i < 5; ++i) {
+      File candidate = current.getChildFile("mcp_server").getChildFile("build").getChildFile("index.js");
+      DBG("MCP Server Manager: Trying path: " + candidate.getFullPathName());
+
+      if (candidate.existsAsFile()) {
+        server_script_path_ = candidate;
+        DBG("MCP Server Manager: Found server at: " + server_script_path_.getFullPathName());
+        break;
+      }
+      current = current.getParentDirectory();
+    }
+  }
+
+  DBG("MCP Server Manager: Final server script path: " + server_script_path_.getFullPathName());
+  DBG("MCP Server Manager: Server script exists: " + String(server_script_path_.existsAsFile() ? "YES" : "NO"));
 }
 
 McpServerManager::~McpServerManager() {
@@ -171,18 +195,40 @@ void McpServerManager::timerCallback() {
     return;
   }
 
+  auto now = Time::getCurrentTime();
+
+  // Check startup timeout
+  if (status_ == McpServerStatus::Starting) {
+    auto elapsed = (now - startup_time_).inMilliseconds();
+
+    // Only send heartbeat once after initial startup delay, if not already pending
+    if (elapsed >= kStartupTimeoutMs && pending_heartbeat_id_.isEmpty()) {
+      DBG("MCP Server Manager: Startup timeout, attempting first heartbeat...");
+      pending_heartbeat_id_ = "startup_heartbeat";  // Mark heartbeat as pending
+      sendHeartbeat();
+    }
+
+    // If still starting after total timeout period, give up
+    if (elapsed >= (kStartupTimeoutMs * 2)) {
+      setStatus(McpServerStatus::Error, "Server startup timeout - no response to heartbeat");
+      killProcess();
+      return;
+    }
+  }
+
   // Process stdout (read incoming messages)
-  processStdout();
+  // DISABLED: Not needed for HTTP communication, and can cause blocking issues
+  // processStdout();
 
   // Process stdin (send outgoing messages)
-  processStdin();
+  // processStdin();
 
   // Check heartbeat timeout
   if (status_ == McpServerStatus::Running) {
-    auto now = Time::getCurrentTime();
-
-    // Send heartbeat if interval elapsed
-    if ((now - last_heartbeat_sent_).inMilliseconds() >= kHeartbeatIntervalMs) {
+    // Send heartbeat if interval elapsed AND no heartbeat is pending
+    if (pending_heartbeat_id_.isEmpty() &&
+        (now - last_heartbeat_sent_).inMilliseconds() >= kHeartbeatIntervalMs) {
+      pending_heartbeat_id_ = "heartbeat";  // Mark heartbeat as pending
       sendHeartbeat();
     }
 
@@ -206,17 +252,26 @@ bool McpServerManager::spawnProcess() {
   command_line += " " + server_script_path_.getFullPathName().quoted();
   command_line += " --port=" + String(port_);
 
+  DBG("MCP Server Manager: Spawning process with command: " + command_line);
+
   // Spawn process with redirected stdout/stderr
   if (!server_process_->start(command_line, ChildProcess::wantStdOut | ChildProcess::wantStdErr)) {
+    DBG("MCP Server Manager: Failed to spawn process!");
     server_process_.reset();
     return false;
   }
 
+  DBG("MCP Server Manager: Process spawned successfully");
+
   stdout_buffer_.reset();
   incomplete_line_.clear();
+  startup_time_ = Time::getCurrentTime();
   last_heartbeat_ = Time::getCurrentTime();
   last_heartbeat_sent_ = Time::getCurrentTime();
   pending_heartbeat_id_.clear();
+
+  // Give the Node.js process a moment to initialize before sending heartbeat
+  DBG("MCP Server Manager: Waiting 2 seconds before first heartbeat...");
 
   return true;
 }
@@ -237,6 +292,8 @@ void McpServerManager::handleCrash() {
   if (status_ == McpServerStatus::Stopped) {
     return;  // Already stopped intentionally
   }
+
+  DBG("MCP Server Manager: Process crashed!");
 
   restart_attempts_++;
   restart_count_++;
@@ -270,34 +327,34 @@ int McpServerManager::calculateRestartDelay() const {
 // ============================================================================
 
 void McpServerManager::processStdout() {
-  // No longer needed with HTTP communication
-  // Keep reading to prevent buffer overflow, but don't parse
-  if (server_process_) {
+  // Read stdout/stderr for debugging purposes (non-blocking)
+  if (server_process_ && server_process_->isRunning()) {
     char buffer[4096];
-    server_process_->readProcessOutput(buffer, sizeof(buffer));
+
+    // readProcessOutput is non-blocking in JUCE and returns 0 if no data
+    int bytes_read = server_process_->readProcessOutput(buffer, sizeof(buffer) - 1);
+
+    if (bytes_read > 0) {
+      buffer[bytes_read] = '\0';
+      String output(buffer);
+
+      // Split by lines and log each line separately
+      StringArray lines = StringArray::fromLines(output);
+      for (const auto& line : lines) {
+        if (line.trim().isNotEmpty()) {
+          DBG("MCP Server output: " + line);
+        }
+      }
+    }
   }
 }
 
 void McpServerManager::processStdin() {
-  if (!server_process_) {
-    return;
-  }
-
-  // Send outgoing messages via HTTP POST (synchronous for simplicity)
-  for (int i = 0; i < 10; ++i) {
-    McpMessage msg;
-    if (!outgoing_queue_.try_dequeue(msg)) {
-      break;
-    }
-
-    // Build JSON body and send via HTTP
-    String json_body = String(msg.toJson().c_str());
-    httpPost("/api/rpc", json_body);
-  }
+  // Not used - communication with Node.js server is via HTTP
 }
 
 void McpServerManager::parseMessages(const String& output) {
-  // No longer used with HTTP communication
+  // Not used - communication with Node.js server is via HTTP
 }
 
 // ============================================================================
@@ -318,7 +375,31 @@ String McpServerManager::findNodeExecutable() {
   path_dirs.addTokens(path_env, ";", "");
 
   for (const auto& dir : path_dirs) {
-    possible_paths.add(File(dir).getChildFile("node.exe").getFullPathName());
+    // Skip empty or invalid directory entries
+    if (dir.isEmpty()) {
+      continue;
+    }
+
+    // Validate that this looks like a valid path
+    String trimmed_dir = dir.trim();
+    if (trimmed_dir.isEmpty() || trimmed_dir.length() < 2) {
+      continue;
+    }
+
+    // On Windows, valid absolute paths start with drive letter (C:) or UNC (\\)
+    if (!trimmed_dir.contains(":") && !trimmed_dir.startsWith("\\\\")) {
+      continue;
+    }
+
+    try {
+      File dir_file(trimmed_dir);
+      if (dir_file.isDirectory()) {
+        possible_paths.add(dir_file.getChildFile("node.exe").getFullPathName());
+      }
+    } catch (...) {
+      // Skip invalid paths that cause File constructor to fail
+      DBG("Skipping invalid PATH entry: " << trimmed_dir);
+    }
   }
 #elif JUCE_MAC
   possible_paths.add("/usr/local/bin/node");
@@ -350,24 +431,29 @@ String McpServerManager::getServerScriptPath() {
 // ============================================================================
 
 void McpServerManager::sendHeartbeat() {
-  // Send HTTP heartbeat to check if server is alive
-  String response = httpPost("/api/heartbeat", "{}");
-
-  if (response.isNotEmpty()) {
-    last_heartbeat_ = Time::getCurrentTime();
-    pending_heartbeat_id_.clear();
-
-    // If we were starting, mark as running now
-    if (status_.load() == McpServerStatus::Starting) {
-      setStatus(McpServerStatus::Running);
-      restart_attempts_ = 0;
-    }
-  }
-
   last_heartbeat_sent_ = Time::getCurrentTime();
+
+  // Send heartbeat asynchronously to avoid blocking the message thread
+  Thread::launch([this]() {
+    String response = httpPost("/api/heartbeat", "{}");
+
+    if (response.isNotEmpty()) {
+      last_heartbeat_ = Time::getCurrentTime();
+      pending_heartbeat_id_.clear();
+
+      // If we were starting, mark as running now - do this on message thread
+      if (status_.load() == McpServerStatus::Starting) {
+        MessageManager::callAsync([this]() {
+          setStatus(McpServerStatus::Running);
+          restart_attempts_ = 0;
+        });
+      }
+    }
+  });
 }
 
 void McpServerManager::handleHeartbeatTimeout() {
+  pending_heartbeat_id_.clear();  // Clear pending heartbeat flag
   setStatus(McpServerStatus::Error, "MCP server heartbeat timeout");
   killProcess();
   handleCrash();

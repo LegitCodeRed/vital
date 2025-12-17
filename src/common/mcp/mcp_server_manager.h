@@ -139,6 +139,7 @@ private:
   String last_error_;
   Time last_heartbeat_;
   Time last_heartbeat_sent_;
+  Time startup_time_;
   String pending_heartbeat_id_;
   int restart_count_;
   int restart_attempts_;

@@ -10,7 +10,18 @@
       "Bash(where:*)",
       "Bash(npm install:*)",
       "Bash(npm run build:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(\"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe\" builds/windows/Vial.sln /p:Configuration=Release /t:Vial_SharedCode /m)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(node build/index.js:*)",
+      "Bash(curl:*)",
+      "Bash(netstat:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(npm start)",
+      "Bash(dir:*)",
+      "Bash(dir \"D:\\PluginDevelopment\\vital\\builds\\windows\\Release\")",
+      "Bash(\"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe\" builds/windows/Vial.sln /p:Configuration=Debug /p:Platform=x64 /t:Vial_Standalone /m)"
     ]
   }
 }

@@ -11,7 +11,8 @@ import {
   ListResourcesRequestSchema,
   ReadResourceRequestSchema
 } from '@modelcontextprotocol/sdk/types.js';
-import readline from 'readline';
+import express from 'express';
+import http from 'http';
 import logger from './logger.js';
 import { tools, handleListParameters, handleGetParameter, handleSetParameter, handleBatchSetParameters } from './tools.js';
 import { resources, handleResourceRead } from './resources.js';
@@ -20,6 +21,9 @@ import { McpMessage } from './types.js';
 export class VitalMcpServer {
   private server: Server;
   private transport: StdioServerTransport | null = null;
+  private httpServer: http.Server | null = null;
+  private app: express.Application;
+  private port: number = 3000;
 
   constructor() {
     this.server = new Server(
@@ -35,8 +39,66 @@ export class VitalMcpServer {
       }
     );
 
+    // Set up Express app for HTTP communication with C++
+    this.app = express();
+    this.app.use(express.json());
+    this.setupHttpRoutes();
+
     this.setupHandlers();
     logger.info('VitalMcpServer initialized');
+  }
+
+  /**
+   * Set up HTTP routes for C++ communication
+   */
+  private setupHttpRoutes(): void {
+    // Heartbeat endpoint
+    this.app.post('/api/heartbeat', (req, res) => {
+      res.json({ status: 'ok', timestamp: Date.now() });
+    });
+
+    // RPC endpoint for JSON-RPC messages from C++
+    this.app.post('/api/rpc', async (req, res) => {
+      try {
+        const message: McpMessage = req.body;
+        logger.debug('Received RPC from C++:', message);
+
+        // Handle different methods
+        if (message.method === 'parameter_changed') {
+          this.handleParameterChanged(message.params);
+          res.json({ success: true });
+        } else if (message.method === 'metadata_parameters') {
+          // Store parameter metadata
+          logger.info(`Received metadata for ${message.params.parameters?.length || 0} parameters`);
+          res.json({ success: true });
+        } else {
+          res.status(400).json({ error: 'Unknown method' });
+        }
+      } catch (error: any) {
+        logger.error('Error handling RPC:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Endpoint for C++ to get pending parameter changes (polling)
+    this.app.get('/api/pending_changes', (req, res) => {
+      // For now, return empty array - full implementation would track changes
+      res.json({ parameters: [] });
+    });
+
+    // Metadata endpoint
+    this.app.post('/api/metadata/parameters', (req, res) => {
+      logger.info(`Received metadata for ${req.body.parameters?.length || 0} parameters`);
+      res.json({ success: true });
+    });
+
+    // Parameter change notification endpoint
+    this.app.post('/api/notify/parameter_changed', (req, res) => {
+      const { name, value } = req.body;
+      logger.info(`Parameter changed: ${name} = ${value}`);
+      this.handleParameterChanged({ name, value });
+      res.json({ success: true });
+    });
   }
 
   private setupHandlers(): void {
@@ -116,80 +178,48 @@ export class VitalMcpServer {
   }
 
   /**
-   * Start the server with stdio transport
+   * Start the server with HTTP server
    */
   async start(): Promise<void> {
-    this.transport = new StdioServerTransport();
-    await this.server.connect(this.transport);
-    
-    // Send server_ready notification to C++
-    this.sendToCpp({
-      jsonrpc: '2.0',
-      method: 'server_ready',
-      params: { port: 3000 }
+    // Parse port from command line args
+    const portArg = process.argv.find(arg => arg.startsWith('--port='));
+    if (portArg) {
+      this.port = parseInt(portArg.split('=')[1], 10);
+    }
+
+    // Start HTTP server for C++ communication
+    await new Promise<void>((resolve, reject) => {
+      this.httpServer = this.app.listen(this.port, () => {
+        logger.info(`HTTP server listening on port ${this.port} for C++ communication`);
+        resolve();
+      }).on('error', reject);
     });
-    
-    logger.info('MCP Server started with stdio transport');
+
+    // TODO: Add MCP SDK transport later (SSE or WebSocket instead of stdio)
+    // For now, only HTTP server is running for C++ communication
+    // this.transport = new StdioServerTransport();
+    // await this.server.connect(this.transport);
+
+    logger.info('MCP Server started with HTTP server');
   }
 
   /**
    * Stop the server
    */
   async stop(): Promise<void> {
+    if (this.httpServer) {
+      await new Promise<void>((resolve) => {
+        this.httpServer!.close(() => resolve());
+      });
+      this.httpServer = null;
+    }
+
     if (this.transport) {
       await this.server.close();
       this.transport = null;
     }
+
     logger.info('MCP Server stopped');
-  }
-
-  /**
-   * Send a message to C++ via stdout
-   * Messages are newline-delimited JSON
-   */
-  private sendToCpp(message: McpMessage): void {
-    const json = JSON.stringify(message);
-    process.stdout.write(json + '\n');
-    logger.debug('Sent to C++:', json);
-  }
-
-  /**
-   * Listen for messages from C++ via stdin
-   * This allows C++ to send parameter_changed notifications
-   */
-  listenForCppMessages(): void {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      terminal: false
-    });
-
-    rl.on('line', (line: string) => {
-      try {
-        const message: McpMessage = JSON.parse(line);
-        logger.debug('Received from C++:', message);
-        
-        // Handle different message types from C++
-        if (message.method === 'parameter_changed') {
-          // Forward parameter change notifications to MCP clients
-          this.handleParameterChanged(message.params);
-        } else if (message.method === 'ping') {
-          // Respond to heartbeat
-          this.sendToCpp({
-            jsonrpc: '2.0',
-            method: 'pong',
-            params: { id: message.params?.id }
-          });
-        }
-      } catch (error: any) {
-        logger.error('Failed to parse message from C++:', error);
-      }
-    });
-
-    rl.on('close', () => {
-      logger.info('stdin closed, shutting down server');
-      this.stop();
-      process.exit(0);
-    });
   }
 
   /**

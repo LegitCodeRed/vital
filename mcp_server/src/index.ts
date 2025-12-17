@@ -37,10 +37,10 @@ async function main() {
   try {
     // Start the MCP server
     await server.start();
-    
-    // Listen for messages from C++ on stdin
-    server.listenForCppMessages();
-    
+
+    // Note: C++ communication is now via HTTP, not stdin
+    // server.listenForCppMessages();
+
     logger.info('Vital MCP Server is running');
   } catch (error) {
     logger.error('Failed to start server:', error);
