@@ -18,6 +18,7 @@ import logger from './logger.js';
 import { tools, handleListParameters, handleGetParameter, handleSetParameter, handleBatchSetParameters } from './tools.js';
 import { resources, handleResourceRead } from './resources.js';
 import { McpMessage } from './types.js';
+import { parameterStore } from './parameter-store.js';
 
 export class VitalMcpServer {
   private server: Server;
@@ -26,6 +27,7 @@ export class VitalMcpServer {
   private app: express.Application;
   private port: number = 3000;
   private useStdio: boolean = false; // Use stdio if no port specified or if stdin is a TTY
+  private pendingParameterChanges: Array<{ name: string; value: number }> = [];
 
   constructor() {
     this.server = new Server(
@@ -43,7 +45,7 @@ export class VitalMcpServer {
 
     // Set up Express app for HTTP communication with C++
     this.app = express();
-    this.app.use(express.json());
+    this.app.use(express.json({ limit: '50mb' })); // Increase limit for parameter metadata
     this.setupHttpRoutes();
 
     this.setupHandlers();
@@ -84,13 +86,18 @@ export class VitalMcpServer {
 
     // Endpoint for C++ to get pending parameter changes (polling)
     this.app.get('/api/pending_changes', (req, res) => {
-      // For now, return empty array - full implementation would track changes
-      res.json({ parameters: [] });
+      // Return and clear pending changes
+      const changes = [...this.pendingParameterChanges];
+      this.pendingParameterChanges = [];
+      res.json({ parameters: changes });
     });
 
-    // Metadata endpoint
+    // Metadata endpoint - store parameter metadata from C++
     this.app.post('/api/metadata/parameters', (req, res) => {
-      logger.info(`Received metadata for ${req.body.parameters?.length || 0} parameters`);
+      const params = req.body.parameters || [];
+      logger.info(`Received metadata for ${params.length} parameters`);
+      parameterStore.setParameters(params);
+      logger.info(`Parameter store now contains ${parameterStore.getParameterCount()} parameters`);
       res.json({ success: true });
     });
 
@@ -117,10 +124,10 @@ export class VitalMcpServer {
 
         switch (name) {
           case 'list_parameters':
-            res.json({ content: [{ type: 'text', text: JSON.stringify(handleListParameters(), null, 2) }] });
+            res.json({ content: [{ type: 'text', text: JSON.stringify(await handleListParameters(), null, 2) }] });
             break;
           case 'get_parameter':
-            res.json({ content: [{ type: 'text', text: JSON.stringify(handleGetParameter(args), null, 2) }] });
+            res.json({ content: [{ type: 'text', text: JSON.stringify(await handleGetParameter(args), null, 2) }] });
             break;
           case 'set_parameter':
             res.json({ content: [{ type: 'text', text: JSON.stringify(await handleSetParameter(args), null, 2) }] });
@@ -286,11 +293,27 @@ export class VitalMcpServer {
 
   /**
    * Handle parameter change notifications from C++
-   * Forward these as notifications to MCP clients
+   * Update the parameter store with new values
    */
   private handleParameterChanged(params: any): void {
     logger.info(`Parameter changed: ${params.name} = ${params.value}`);
-    // Note: Notifications to MCP clients would go through the SDK's notification system
-    // This is a placeholder for the full bidirectional notification implementation
+
+    // Update parameter value in store
+    const param = parameterStore.getParameter(params.name);
+    if (param) {
+      param.value = params.value;
+      logger.debug(`Updated ${params.name} to ${params.value}`);
+    }
+  }
+
+  /**
+   * Queue a parameter change to be picked up by C++ polling
+   */
+  public queueParameterChange(name: string, value: number): void {
+    this.pendingParameterChanges.push({ name, value });
+    logger.info(`Queued parameter change: ${name} = ${value}`);
   }
 }
+
+// Export singleton instance for tools to access
+export let serverInstance: VitalMcpServer | null = null;

@@ -39,13 +39,13 @@ void McpParameterBridge::start() {
   is_running_ = true;
   metadata_sent_ = false;
 
-  // TEMP: Disable timer to isolate freeze issue
-  // Start polling timer
-  // startTimer(kPollIntervalMs);
+  // Start polling timer on message thread
+  MessageManager::callAsync([this]() {
+    startTimer(kPollIntervalMs);
+  });
 
-  // TODO: Re-enable metadata sending after fixing corrupted string issue
-  // For now, skip sending metadata on startup to prevent crash
-  // sendAllParameterMetadata();
+  // Send parameter metadata to MCP server
+  sendAllParameterMetadata();
 }
 
 void McpParameterBridge::stop() {
@@ -54,7 +54,11 @@ void McpParameterBridge::stop() {
   }
 
   is_running_ = false;
-  stopTimer();
+
+  // Stop timer on message thread
+  MessageManager::callAsync([this]() {
+    stopTimer();
+  });
 
   const ScopedLock lock(pending_changes_lock_);
   pending_changes_.clear();
@@ -92,39 +96,65 @@ void McpParameterBridge::onParameterChanged(const std::string& name, mono_float 
 
 void McpParameterBridge::sendAllParameterMetadata() {
   if (!is_running_ || !mcp_manager_ || !mcp_manager_->isServerRunning()) {
+    DBG("Cannot send metadata: bridge not running or MCP server not available");
     return;
   }
 
-  // Build array of all parameter metadata
-  nlohmann::json parameters_array = nlohmann::json::array();
+  DBG("Starting to send parameter metadata...");
 
-  int num_params = parameter_lookup_.getNumParameters();
-  for (int i = 0; i < num_params; ++i) {
-    const ValueDetails* details = parameter_lookup_.getDetails(i);
-    if (details) {
-      // Get current value from synth
-      mono_float current_value = 0.0f;
-      auto& controls = synth_base_->getControls();
-      auto control_it = controls.find(details->name);
-      if (control_it != controls.end()) {
-        current_value = control_it->second->value();
+  try {
+    // Build array of all parameter metadata
+    nlohmann::json parameters_array = nlohmann::json::array();
+
+    int num_params = parameter_lookup_.getNumParameters();
+    DBG("Total parameters to send: " << num_params);
+
+    for (int i = 0; i < num_params; ++i) {
+      const ValueDetails* details = parameter_lookup_.getDetails(i);
+      if (details) {
+        try {
+          // Get current value from synth
+          mono_float current_value = 0.0f;
+          auto& controls = synth_base_->getControls();
+          auto control_it = controls.find(details->name);
+          if (control_it != controls.end()) {
+            current_value = control_it->second->value();
+          }
+
+          nlohmann::json param_json = parameterDetailsToJsonObject(details->name, *details, current_value);
+
+          // Skip error entries
+          if (param_json.count("error") == 0) {
+            parameters_array.push_back(param_json);
+          }
+        } catch (const std::exception& e) {
+          DBG("Error serializing parameter " << i << ": " << e.what());
+          continue;
+        }
       }
-
-      parameters_array.push_back(parameterDetailsToJsonObject(details->name, *details, current_value));
     }
-  }
 
-  // Send to MCP server via HTTP
-  nlohmann::json body = {
-    {"parameters", parameters_array}
-  };
+    DBG("Successfully serialized " << parameters_array.size() << " parameters");
 
-  std::string json_str = body.dump();
-  String json_body(json_str.c_str());
-  String response = mcp_manager_->httpPost("/api/metadata/parameters", json_body);
+    // Send to MCP server via HTTP
+    nlohmann::json body = {
+      {"parameters", parameters_array}
+    };
 
-  if (response.isNotEmpty()) {
-    metadata_sent_ = true;
+    std::string json_str = body.dump();
+    String json_body(json_str.c_str());
+
+    DBG("Sending metadata to MCP server... (payload size: " << json_str.length() << " bytes)");
+    String response = mcp_manager_->httpPost("/api/metadata/parameters", json_body);
+
+    if (response.isNotEmpty()) {
+      DBG("Metadata sent successfully. Response: " << response);
+      metadata_sent_ = true;
+    } else {
+      DBG("Failed to send metadata - empty response");
+    }
+  } catch (const std::exception& e) {
+    DBG("FATAL: Error in sendAllParameterMetadata: " << e.what());
   }
 }
 
@@ -133,13 +163,7 @@ void McpParameterBridge::timerCallback() {
     return;
   }
 
-  // TODO: Re-enable metadata sending after fixing corrupted string issue
-  // Send metadata if not sent yet
-  // if (!metadata_sent_) {
-  //   sendAllParameterMetadata();
-  // }
-
-  // Poll for parameter change requests from MCP server
+  // Poll for parameter change requests from MCP server (async)
   pollParameterChanges();
 }
 
@@ -161,7 +185,12 @@ void McpParameterBridge::pollParameterChanges() {
       auto json_response = nlohmann::json::parse(response.toStdString());
 
       if (json_response.count("parameters") > 0 && json_response["parameters"].is_array()) {
-        for (const auto& param : json_response["parameters"]) {
+        auto params = json_response["parameters"];
+        if (params.size() > 0) {
+          DBG("Received " << params.size() << " parameter changes from MCP");
+        }
+
+        for (const auto& param : params) {
           if (param.count("name") > 0 && param.count("value") > 0) {
             std::string name = param["name"].get<std::string>();
             double value = param["value"].get<double>();
@@ -189,6 +218,8 @@ void McpParameterBridge::applyParameterChange(const std::string& name, mono_floa
   // Clamp value to valid range
   mono_float clamped_value = jlimit(details.min, details.max, value);
 
+  DBG("Applying MCP parameter change: " << name.c_str() << " = " << clamped_value);
+
   // Mark as pending to prevent echo
   {
     const ScopedLock lock(pending_changes_lock_);
@@ -197,8 +228,31 @@ void McpParameterBridge::applyParameterChange(const std::string& name, mono_floa
 
   // Apply change to Vital via SynthBase on message thread to avoid threading issues
   MessageManager::callAsync([this, name, clamped_value]() {
+    DBG("Executing parameter change on message thread: " << name.c_str());
     synth_base_->valueChangedExternal(name, clamped_value);
   });
+}
+
+// Helper to sanitize strings - replace any null bytes and non-printable chars
+static std::string sanitizeString(const std::string& input) {
+  std::string result;
+  result.reserve(input.length());
+
+  for (char c : input) {
+    // Only keep printable ASCII and common whitespace
+    if ((c >= 32 && c <= 126) || c == '\t' || c == '\n' || c == '\r') {
+      result += c;
+    } else {
+      result += '?'; // Replace invalid chars
+    }
+  }
+
+  // Limit length
+  if (result.length() > 256) {
+    result = result.substr(0, 256);
+  }
+
+  return result;
 }
 
 nlohmann::json McpParameterBridge::parameterDetailsToJsonObject(const std::string& name,
@@ -207,17 +261,14 @@ nlohmann::json McpParameterBridge::parameterDetailsToJsonObject(const std::strin
   nlohmann::json j;
 
   try {
-    // Validate string lengths before using them (prevent corrupted strings)
-    if (name.length() > 10000 || details.display_name.length() > 10000 ||
-        details.display_units.length() > 10000) {
-      DBG("Warning: Parameter has suspiciously long string, skipping");
-      j = {{"name", "corrupted"}, {"error", "string data corrupted"}};
-      return j;
-    }
+    // Sanitize all strings before use
+    std::string safe_name = sanitizeString(name);
+    std::string safe_display_name = sanitizeString(details.display_name);
+    std::string safe_units = sanitizeString(details.display_units);
 
     j = {
-      {"name", name},
-      {"display_name", details.display_name},
+      {"name", safe_name},
+      {"display_name", safe_display_name},
       {"value", static_cast<double>(current_value)},
       {"min", static_cast<double>(details.min)},
       {"max", static_cast<double>(details.max)},
@@ -226,11 +277,11 @@ nlohmann::json McpParameterBridge::parameterDetailsToJsonObject(const std::strin
     };
 
     // Add optional fields
-    if (!details.display_units.empty()) {
-      j["units"] = details.display_units;
+    if (!safe_units.empty()) {
+      j["units"] = safe_units;
     }
   } catch (const std::exception& e) {
-    DBG("Error creating JSON for parameter " << name.c_str() << ": " << e.what());
+    DBG("Error creating JSON for parameter: " << e.what());
     // Return minimal valid JSON
     j = {{"name", "error"}, {"error", "failed to serialize"}};
     return j;
@@ -240,14 +291,19 @@ nlohmann::json McpParameterBridge::parameterDetailsToJsonObject(const std::strin
     nlohmann::json string_lookup_array = nlohmann::json::array();
     try {
       int count = 0;
-      // Safety limit: max 1000 entries to prevent reading garbage memory
-      while (count < 1000 && !details.string_lookup[count].empty()) {
-        string_lookup_array.push_back(details.string_lookup[count]);
+      // Safety limit: max 100 entries to prevent reading garbage memory
+      while (count < 100 && !details.string_lookup[count].empty()) {
+        std::string sanitized = sanitizeString(details.string_lookup[count]);
+        if (!sanitized.empty()) {
+          string_lookup_array.push_back(sanitized);
+        }
         count++;
       }
-      j["string_lookup"] = string_lookup_array;
+      if (string_lookup_array.size() > 0) {
+        j["string_lookup"] = string_lookup_array;
+      }
     } catch (const std::exception& e) {
-      DBG("Warning: Error reading string_lookup for parameter " << name.c_str() << ": " << e.what());
+      DBG("Warning: Error reading string_lookup: " << e.what());
       // Skip string_lookup if there's an error
     }
   }

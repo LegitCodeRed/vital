@@ -3,13 +3,14 @@
  * Spawned by Vital C++ application, communicates via stdio
  */
 
-import { VitalMcpServer } from './server.js';
+import { VitalMcpServer, serverInstance } from './server.js';
 import logger from './logger.js';
 
 async function main() {
   logger.info('Starting Vital MCP Server...');
-  
+
   const server = new VitalMcpServer();
+  (globalThis as any).vitalServer = server; // Make globally accessible for tools
   
   // Handle graceful shutdown
   process.on('SIGINT', async () => {

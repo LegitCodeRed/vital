@@ -5,6 +5,7 @@
 import { z } from 'zod';
 import { McpMessage, SetParameterRequest, BatchSetParametersRequest } from './types.js';
 import logger from './logger.js';
+import { parameterStore } from './parameter-store.js';
 
 // Zod schemas for tool inputs
 export const SetParameterSchema = z.object({
@@ -37,23 +38,30 @@ function sendToCpp(message: McpMessage): void {
  */
 export async function handleListParameters(): Promise<any> {
   logger.info('Handling list_parameters request');
-  
-  // Send request to C++ and wait for response
-  const requestId = Date.now().toString();
-  const message: McpMessage = {
-    jsonrpc: '2.0',
-    method: 'list_parameters',
-    params: {},
-    id: requestId
-  };
-  
-  sendToCpp(message);
-  
-  // For now, return a placeholder response
-  // In a full implementation, we'd wait for C++ to respond
+
+  const parameters = parameterStore.getAllParameters();
+
+  if (parameters.length === 0) {
+    return {
+      success: false,
+      message: 'No parameters loaded yet. Make sure Vital MCP bridge is connected and metadata has been sent.',
+      parameter_count: 0
+    };
+  }
+
   return {
     success: true,
-    message: 'Request sent to Vital. Parameters will be returned via C++ response.'
+    parameter_count: parameters.length,
+    parameters: parameters.map(p => ({
+      name: p.name,
+      display_name: p.display_name,
+      value: p.value,
+      min: p.min,
+      max: p.max,
+      default: p.default,
+      units: p.units,
+      string_lookup: p.string_lookup
+    }))
   };
 }
 
@@ -63,20 +71,27 @@ export async function handleListParameters(): Promise<any> {
 export async function handleGetParameter(params: any): Promise<any> {
   const validated = GetParameterSchema.parse(params);
   logger.info(`Getting parameter: ${validated.name}`);
-  
-  const requestId = Date.now().toString();
-  const message: McpMessage = {
-    jsonrpc: '2.0',
-    method: 'get_parameter',
-    params: { name: validated.name },
-    id: requestId
-  };
-  
-  sendToCpp(message);
-  
+
+  const parameter = parameterStore.getParameter(validated.name);
+
+  if (!parameter) {
+    return {
+      success: false,
+      message: `Parameter '${validated.name}' not found. Available parameters: ${parameterStore.getParameterCount()}`
+    };
+  }
+
   return {
     success: true,
-    message: `Request sent to Vital for parameter: ${validated.name}`
+    parameter: {
+      name: parameter.name,
+      display_name: parameter.display_name,
+      value: parameter.value,
+      min: parameter.min,
+      max: parameter.max,
+      units: parameter.units,
+      string_lookup: parameter.string_lookup
+    }
   };
 }
 
@@ -86,22 +101,25 @@ export async function handleGetParameter(params: any): Promise<any> {
 export async function handleSetParameter(params: any): Promise<any> {
   const validated = SetParameterSchema.parse(params);
   logger.info(`Setting parameter: ${validated.name} = ${validated.value}`);
-  
-  const requestId = Date.now().toString();
-  const message: McpMessage = {
-    jsonrpc: '2.0',
-    method: 'set_parameter',
-    params: {
-      name: validated.name,
-      value: validated.value
-    },
-    id: requestId
-  };
-  
-  sendToCpp(message);
-  
+
+  // Check if parameter exists
+  const parameter = parameterStore.getParameter(validated.name);
+  if (!parameter) {
+    return {
+      success: false,
+      message: `Parameter '${validated.name}' not found`
+    };
+  }
+
+  // Queue the change for C++ to pick up
+  const server = (globalThis as any).vitalServer;
+  if (server) {
+    server.queueParameterChange(validated.name, validated.value);
+  }
+
   return {
     success: true,
+    message: `Queued ${validated.name} = ${validated.value}`,
     parameter: validated.name,
     value: validated.value
   };
@@ -113,22 +131,31 @@ export async function handleSetParameter(params: any): Promise<any> {
 export async function handleBatchSetParameters(params: any): Promise<any> {
   const validated = BatchSetParametersSchema.parse(params);
   logger.info(`Batch setting ${validated.parameters.length} parameters`);
-  
-  const requestId = Date.now().toString();
-  const message: McpMessage = {
-    jsonrpc: '2.0',
-    method: 'batch_set_parameters',
-    params: {
-      parameters: validated.parameters
-    },
-    id: requestId
-  };
-  
-  sendToCpp(message);
-  
+
+  const server = (globalThis as any).vitalServer;
+  if (!server) {
+    return {
+      success: false,
+      message: 'Server instance not available'
+    };
+  }
+
+  const results = [];
+  for (const param of validated.parameters) {
+    const parameter = parameterStore.getParameter(param.name);
+    if (parameter) {
+      server.queueParameterChange(param.name, param.value);
+      results.push({ name: param.name, value: param.value, queued: true });
+    } else {
+      results.push({ name: param.name, value: param.value, queued: false, error: 'Not found' });
+    }
+  }
+
   return {
     success: true,
-    count: validated.parameters.length
+    message: `Queued ${results.filter(r => r.queued).length} of ${validated.parameters.length} parameters`,
+    count: validated.parameters.length,
+    results
   };
 }
 
