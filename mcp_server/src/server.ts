@@ -5,6 +5,7 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -20,10 +21,11 @@ import { McpMessage } from './types.js';
 
 export class VitalMcpServer {
   private server: Server;
-  private transport: StdioServerTransport | null = null;
+  private transport: StdioServerTransport | SSEServerTransport | null = null;
   private httpServer: http.Server | null = null;
   private app: express.Application;
   private port: number = 3000;
+  private useStdio: boolean = false; // Use stdio if no port specified or if stdin is a TTY
 
   constructor() {
     this.server = new Server(
@@ -98,6 +100,57 @@ export class VitalMcpServer {
       logger.info(`Parameter changed: ${name} = ${value}`);
       this.handleParameterChanged({ name, value });
       res.json({ success: true });
+    });
+
+    // MCP HTTP endpoints for bridge - directly expose MCP functionality
+    this.app.post('/mcp/tools/list', async (req, res) => {
+      try {
+        res.json({ tools });
+      } catch (error: any) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/mcp/tools/call', async (req, res) => {
+      try {
+        const { name, arguments: args } = req.body;
+
+        switch (name) {
+          case 'list_parameters':
+            res.json({ content: [{ type: 'text', text: JSON.stringify(handleListParameters(), null, 2) }] });
+            break;
+          case 'get_parameter':
+            res.json({ content: [{ type: 'text', text: JSON.stringify(handleGetParameter(args), null, 2) }] });
+            break;
+          case 'set_parameter':
+            res.json({ content: [{ type: 'text', text: JSON.stringify(await handleSetParameter(args), null, 2) }] });
+            break;
+          case 'batch_set_parameters':
+            res.json({ content: [{ type: 'text', text: JSON.stringify(await handleBatchSetParameters(args), null, 2) }] });
+            break;
+          default:
+            res.status(400).json({ error: `Unknown tool: ${name}` });
+        }
+      } catch (error: any) {
+        res.json({ content: [{ type: 'text', text: JSON.stringify({ error: error.message }, null, 2) }], isError: true });
+      }
+    });
+
+    this.app.post('/mcp/resources/list', async (req, res) => {
+      try {
+        res.json({ resources });
+      } catch (error: any) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/mcp/resources/read', async (req, res) => {
+      try {
+        const result = handleResourceRead(req.body.uri);
+        res.json(result);
+      } catch (error: any) {
+        res.status(500).json({ error: error.message });
+      }
     });
   }
 
@@ -178,29 +231,38 @@ export class VitalMcpServer {
   }
 
   /**
-   * Start the server with HTTP server
+   * Start the server - uses stdio if spawned by Claude Desktop, HTTP if spawned by C++
    */
   async start(): Promise<void> {
     // Parse port from command line args
     const portArg = process.argv.find(arg => arg.startsWith('--port='));
+
     if (portArg) {
+      // Port specified - use HTTP mode (spawned by C++)
       this.port = parseInt(portArg.split('=')[1], 10);
+      this.useStdio = false;
+
+      // Start HTTP server for C++ communication AND MCP SSE endpoints
+      await new Promise<void>((resolve, reject) => {
+        this.httpServer = this.app.listen(this.port, () => {
+          logger.info(`HTTP server listening on port ${this.port}`);
+          logger.info(`  - C++ API available at http://localhost:${this.port}/api/*`);
+          logger.info(`  - MCP SSE available at http://localhost:${this.port}/sse`);
+          resolve();
+        }).on('error', reject);
+      });
+
+      logger.info('Vital MCP Server ready for connections');
+    } else {
+      // No port - use stdio mode (spawned by Claude Desktop)
+      this.useStdio = true;
+      logger.info('Starting MCP Server in stdio mode for Claude Desktop');
+
+      this.transport = new StdioServerTransport();
+      await this.server.connect(this.transport);
+
+      logger.info('MCP Server connected via stdio');
     }
-
-    // Start HTTP server for C++ communication
-    await new Promise<void>((resolve, reject) => {
-      this.httpServer = this.app.listen(this.port, () => {
-        logger.info(`HTTP server listening on port ${this.port} for C++ communication`);
-        resolve();
-      }).on('error', reject);
-    });
-
-    // TODO: Add MCP SDK transport later (SSE or WebSocket instead of stdio)
-    // For now, only HTTP server is running for C++ communication
-    // this.transport = new StdioServerTransport();
-    // await this.server.connect(this.transport);
-
-    logger.info('MCP Server started with HTTP server');
   }
 
   /**
