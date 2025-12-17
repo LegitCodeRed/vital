@@ -39,8 +39,9 @@ void McpParameterBridge::start() {
   is_running_ = true;
   metadata_sent_ = false;
 
+  // TEMP: Disable timer to isolate freeze issue
   // Start polling timer
-  startTimer(kPollIntervalMs);
+  // startTimer(kPollIntervalMs);
 
   // TODO: Re-enable metadata sending after fixing corrupted string issue
   // For now, skip sending metadata on startup to prevent crash

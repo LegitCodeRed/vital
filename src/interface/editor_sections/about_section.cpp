@@ -357,7 +357,7 @@ void AboutSection::startMcpServer() {
   }
 
   // Start server on message thread (spawning process is fast and non-blocking)
-  DBG("AboutSection: Starting MCP server...");
+  // DBG("AboutSection: Starting MCP server...");
 
   if (mcp_manager->startServer()) {
     // Enable MCP bridge in synth
@@ -424,8 +424,6 @@ void AboutSection::updateMcpStatus() {
 }
 
 void AboutSection::mcpServerStatusChanged(vital::McpServerStatus new_status, const String& error_message) {
-  // Update status on message thread
-  MessageManager::callAsync([this]() {
-    updateMcpStatus();
-  });
+  // This is already called asynchronously from McpServerManager::setStatus(), so update directly
+  updateMcpStatus();
 }

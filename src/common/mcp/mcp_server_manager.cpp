@@ -94,7 +94,8 @@ bool McpServerManager::startServer() {
   restart_attempts_ = 0;
 
   if (spawnProcess()) {
-    startTimer(kTimerIntervalMs);
+    // TEMP: Disable timer to isolate freeze issue
+    // startTimer(kTimerIntervalMs);
     return true;
   }
 
@@ -252,26 +253,27 @@ bool McpServerManager::spawnProcess() {
   command_line += " " + server_script_path_.getFullPathName().quoted();
   command_line += " --port=" + String(port_);
 
-  DBG("MCP Server Manager: Spawning process with command: " + command_line);
+  // DBG("MCP Server Manager: Spawning process with command: " + command_line);
 
-  // Spawn process with redirected stdout/stderr
-  if (!server_process_->start(command_line, ChildProcess::wantStdOut | ChildProcess::wantStdErr)) {
-    DBG("MCP Server Manager: Failed to spawn process!");
+  // Spawn process without redirecting stdout/stderr (we use HTTP for communication)
+  if (!server_process_->start(command_line, 0)) {
+    // DBG("MCP Server Manager: Failed to spawn process!");
     server_process_.reset();
     return false;
   }
 
-  DBG("MCP Server Manager: Process spawned successfully");
+  // DBG("MCP Server Manager: Process spawned successfully");
 
-  stdout_buffer_.reset();
-  incomplete_line_.clear();
+  // Don't use stdout_buffer since we're not redirecting stdout
+  // stdout_buffer_.reset();
+  // incomplete_line_.clear();
+
   startup_time_ = Time::getCurrentTime();
   last_heartbeat_ = Time::getCurrentTime();
   last_heartbeat_sent_ = Time::getCurrentTime();
   pending_heartbeat_id_.clear();
 
-  // Give the Node.js process a moment to initialize before sending heartbeat
-  DBG("MCP Server Manager: Waiting 2 seconds before first heartbeat...");
+  // DBG("MCP Server Manager: Process initialization complete");
 
   return true;
 }
@@ -473,7 +475,10 @@ void McpServerManager::setStatus(McpServerStatus new_status, const String& error
   }
 
   if (status_changed) {
-    notifyListeners();
+    // Notify listeners asynchronously to avoid re-entrancy issues
+    MessageManager::callAsync([this, new_status]() {
+      notifyListeners();
+    });
   }
 }
 
