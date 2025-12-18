@@ -164,8 +164,11 @@ void EffectsInterface::orderChanged(DragDropEffectOrder* order) {
 void EffectsInterface::effectEnabledChanged(int order_index, bool enabled) {
   ScopedLock lock(open_gl_critical_section_);
 
-  if (enabled)
-    effects_list_[order_index]->activator()->setToggleState(true, sendNotification);
+  auto* activator = effects_list_[order_index]->activator();
+  if (activator) {
+    activator->setToggleState(enabled, NotificationType::dontSendNotification);
+    effects_list_[order_index]->setActive(enabled);
+  }
 
   setEffectPositions();
   repaintBackground();

@@ -15,7 +15,7 @@ import {
 import express from 'express';
 import http from 'http';
 import logger from './logger.js';
-import { tools, handleListParameters, handleGetParameter, handleSetParameter, handleBatchSetParameters } from './tools.js';
+import { tools, handleListParameters, handleGetParameter, handleSetParameter, handleBatchSetParameters, handleImportWavetable } from './tools.js';
 import { resources, handleResourceRead } from './resources.js';
 import { McpMessage } from './types.js';
 import { parameterStore } from './parameter-store.js';
@@ -28,6 +28,7 @@ export class VitalMcpServer {
   private port: number = 3000;
   private useStdio: boolean = false; // Use stdio if no port specified or if stdin is a TTY
   private pendingParameterChanges: Array<{ name: string; value: number }> = [];
+  private pendingWavetableImports: Array<{ oscillator: number; path: string; name: string; description?: string }> = [];
 
   constructor() {
     this.server = new Server(
@@ -92,6 +93,13 @@ export class VitalMcpServer {
       res.json({ parameters: changes });
     });
 
+    // Pending wavetable imports (polled by C++)
+    this.app.get('/api/pending_wavetables', (req, res) => {
+      const imports = [...this.pendingWavetableImports];
+      this.pendingWavetableImports = [];
+      res.json({ wavetables: imports });
+    });
+
     // Metadata endpoint - store parameter metadata from C++
     this.app.post('/api/metadata/parameters', (req, res) => {
       const params = req.body.parameters || [];
@@ -134,6 +142,9 @@ export class VitalMcpServer {
             break;
           case 'batch_set_parameters':
             res.json({ content: [{ type: 'text', text: JSON.stringify(await handleBatchSetParameters(args), null, 2) }] });
+            break;
+          case 'import_wavetable':
+            res.json({ content: [{ type: 'text', text: JSON.stringify(await handleImportWavetable(args), null, 2) }] });
             break;
           default:
             res.status(400).json({ error: `Unknown tool: ${name}` });
@@ -203,6 +214,14 @@ export class VitalMcpServer {
               content: [{
                 type: 'text',
                 text: JSON.stringify(await handleBatchSetParameters(request.params.arguments))
+              }]
+            };
+
+          case 'import_wavetable':
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(await handleImportWavetable(request.params.arguments))
               }]
             };
             
@@ -312,6 +331,14 @@ export class VitalMcpServer {
   public queueParameterChange(name: string, value: number): void {
     this.pendingParameterChanges.push({ name, value });
     logger.info(`Queued parameter change: ${name} = ${value}`);
+  }
+
+  /**
+   * Queue a wavetable import to be picked up by C++ polling
+   */
+  public queueWavetableImport(payload: { oscillator: number; path: string; name: string; description?: string }): void {
+    this.pendingWavetableImports.push(payload);
+    logger.info(`Queued wavetable import: osc ${payload.oscillator} <- ${payload.name} (${payload.path})`);
   }
 }
 

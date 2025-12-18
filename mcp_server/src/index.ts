@@ -3,7 +3,7 @@
  * Spawned by Vital C++ application, communicates via stdio
  */
 
-import { VitalMcpServer, serverInstance } from './server.js';
+import { VitalMcpServer } from './server.js';
 import logger from './logger.js';
 
 async function main() {

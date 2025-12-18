@@ -67,8 +67,14 @@ private:
   // Poll MCP server for pending parameter change requests
   void pollParameterChanges();
 
+  // Poll MCP server for pending wavetable imports
+  void pollWavetableImports();
+
   // Apply a parameter change from MCP server
   void applyParameterChange(const std::string& name, mono_float value);
+
+  // Apply a wavetable import to a target oscillator
+  void applyWavetableImport(const std::string& path, int oscillator);
 
   // Send parameter metadata to MCP server
   void sendParameterMetadata(const std::string& name, const ValueDetails& details);
@@ -89,6 +95,7 @@ private:
 
   // Poll interval
   static constexpr int kPollIntervalMs = 1000;  // Poll every 1 second (async now, so can be less frequent)
+  static constexpr int64 kMaxWavetableBytes = 10 * 1024 * 1024;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(McpParameterBridge)
 };

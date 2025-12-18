@@ -6,6 +6,8 @@ import { z } from 'zod';
 import { McpMessage, SetParameterRequest, BatchSetParametersRequest } from './types.js';
 import logger from './logger.js';
 import { parameterStore } from './parameter-store.js';
+import fs from 'fs/promises';
+import path from 'path';
 
 // Zod schemas for tool inputs
 export const SetParameterSchema = z.object({
@@ -22,6 +24,13 @@ export const BatchSetParametersSchema = z.object({
     name: z.string(),
     value: z.number().min(0).max(1)
   })).describe('Array of parameters to set')
+});
+
+export const ImportWavetableSchema = z.object({
+  fileName: z.string().min(1).describe('Name for the saved wavetable file (will be sanitized)'),
+  data: z.string().min(1).describe('Base64-encoded .vitaltable contents'),
+  oscillator: z.number().int().min(1).max(3).default(1).describe('Target oscillator slot (1-3)'),
+  description: z.string().optional().describe('Optional description for logging/debugging')
 });
 
 /**
@@ -159,6 +168,57 @@ export async function handleBatchSetParameters(params: any): Promise<any> {
   };
 }
 
+/**
+ * Store a .vitaltable and queue it for import into the running synth
+ */
+export async function handleImportWavetable(params: any): Promise<any> {
+  const validated = ImportWavetableSchema.parse(params);
+  const server = (globalThis as any).vitalServer;
+
+  if (!server) {
+    return {
+      success: false,
+      message: 'Server instance not available - cannot queue wavetable import'
+    };
+  }
+
+  const safeName = validated.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const finalName = safeName.toLowerCase().endsWith('.vitaltable') ? safeName : `${safeName}.vitaltable`;
+
+  const wavetableDir = path.join(process.cwd(), 'wavetables');
+  await fs.mkdir(wavetableDir, { recursive: true });
+
+  const buffer = Buffer.from(validated.data, 'base64');
+  const maxBytes = 10 * 1024 * 1024; // 10 MB guardrail
+  if (buffer.length === 0) {
+    throw new Error('Wavetable payload is empty');
+  }
+  if (buffer.length > maxBytes) {
+    throw new Error(`Wavetable too large (${buffer.length} bytes). Limit is ${maxBytes} bytes.`);
+  }
+
+  const fullPath = path.join(wavetableDir, finalName);
+  await fs.writeFile(fullPath, buffer);
+
+  if (typeof server.queueWavetableImport === 'function') {
+    server.queueWavetableImport({
+      oscillator: validated.oscillator,
+      path: fullPath,
+      name: finalName,
+      description: validated.description
+    });
+  }
+
+  logger.info(`Saved wavetable ${finalName} (${buffer.length} bytes) for oscillator ${validated.oscillator}`);
+
+  return {
+    success: true,
+    message: `Wavetable saved and queued for import`,
+    file: fullPath,
+    oscillator: validated.oscillator
+  };
+}
+
 // Tool definitions for MCP SDK
 export const tools = [
   {
@@ -223,6 +283,20 @@ export const tools = [
         }
       },
       required: ['parameters']
+    }
+  },
+  {
+    name: 'import_wavetable',
+    description: 'Upload a .vitaltable (base64) and queue it for automatic import into Vital',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileName: { type: 'string', description: 'Filename to store (will be sanitized and .vitaltable enforced)' },
+        data: { type: 'string', description: 'Base64-encoded .vitaltable contents' },
+        oscillator: { type: 'integer', minimum: 1, maximum: 3, description: 'Target oscillator slot (1-3)' },
+        description: { type: 'string', description: 'Optional label for logs' }
+      },
+      required: ['fileName', 'data']
     }
   }
 ];

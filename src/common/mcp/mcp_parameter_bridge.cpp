@@ -165,6 +165,7 @@ void McpParameterBridge::timerCallback() {
 
   // Poll for parameter change requests from MCP server (async)
   pollParameterChanges();
+  pollWavetableImports();
 }
 
 void McpParameterBridge::pollParameterChanges() {
@@ -205,6 +206,33 @@ void McpParameterBridge::pollParameterChanges() {
   });
 }
 
+void McpParameterBridge::pollWavetableImports() {
+  auto manager = mcp_manager_;
+  auto self = this;
+
+  Thread::launch([manager, self]() {
+    String response = manager->httpGet("/api/pending_wavetables");
+    if (response.isEmpty())
+      return;
+
+    try {
+      auto json_response = nlohmann::json::parse(response.toStdString());
+      auto it = json_response.find("wavetables");
+      if (it == json_response.end() || !it->is_array())
+        return;
+
+      for (const auto& wavetable : *it) {
+        std::string path = wavetable.value("path", std::string());
+        int oscillator = wavetable.value("oscillator", 1);
+        self->applyWavetableImport(path, oscillator);
+      }
+    }
+    catch (const nlohmann::json::exception& e) {
+      DBG("Failed to parse wavetable import payload: " << e.what());
+    }
+  });
+}
+
 void McpParameterBridge::applyParameterChange(const std::string& name, mono_float value) {
   // Validate parameter exists
   if (!parameter_lookup_.isParameter(name)) {
@@ -230,6 +258,70 @@ void McpParameterBridge::applyParameterChange(const std::string& name, mono_floa
   MessageManager::callAsync([this, name, clamped_value]() {
     DBG("Executing parameter change on message thread: " << name.c_str());
     synth_base_->valueChangedExternal(name, clamped_value);
+  });
+}
+
+void McpParameterBridge::applyWavetableImport(const std::string& path, int oscillator) {
+  if (!is_running_ || !mcp_manager_ || !mcp_manager_->isServerRunning())
+    return;
+
+  if (oscillator < 1 || oscillator > vital::kNumOscillators) {
+    DBG("Invalid oscillator index for wavetable import: " << oscillator);
+    return;
+  }
+
+  File wavetable_file(path);
+  if (!wavetable_file.existsAsFile()) {
+    DBG("Wavetable file missing: " << path.c_str());
+    return;
+  }
+
+  int64 file_size = wavetable_file.getSize();
+  if (file_size <= 0 || file_size > kMaxWavetableBytes) {
+    DBG("Wavetable file has invalid size: " << file_size);
+    return;
+  }
+
+  auto self = this;
+  MessageManager::callAsync([self, path, oscillator]() {
+    File file(path);
+    FileInputStream stream(file);
+    if (!stream.openedOk()) {
+      DBG("Failed to open wavetable file for import: " << path.c_str());
+      return;
+    }
+
+    MemoryBlock block;
+    if (!stream.readIntoMemoryBlock(block)) {
+      DBG("Failed to read wavetable file: " << path.c_str());
+      return;
+    }
+
+    std::string json_text(static_cast<const char*>(block.getData()), block.getSize());
+    nlohmann::json json_data;
+    try {
+      json_data = nlohmann::json::parse(json_text);
+    }
+    catch (const std::exception& e) {
+      DBG("Failed to parse wavetable JSON: " << e.what());
+      return;
+    }
+
+    WavetableCreator* creator = self->synth_base_->getWavetableCreator(oscillator - 1);
+    if (!creator) {
+      DBG("No wavetable creator available for oscillator: " << oscillator);
+      return;
+    }
+
+    try {
+      creator->clear();
+      creator->jsonToState(json_data);
+      creator->render();
+      DBG("Imported wavetable into oscillator " << oscillator << " from " << path.c_str());
+    }
+    catch (const std::exception& e) {
+      DBG("Error applying wavetable import: " << e.what());
+    }
   });
 }
 
